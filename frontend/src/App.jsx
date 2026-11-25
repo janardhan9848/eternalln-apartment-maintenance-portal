@@ -180,17 +180,23 @@ async function login(event) {
           : {}
       ),
       loggedInRole === "admin"
-        ? Promise.all([api.getFlats(), api.getResidents(), api.getExpenses()])
+        ? Promise.all([
+          api.getFlats(),
+          api.getResidents(),
+          api.getExpenses(),
+          api.getStaffPayments()
+        ])
         : Promise.resolve(null)
     ]);
     setPayments(paymentResult.data);
 
     if (loggedInRole === "admin") {
       const currentMonthResult = await api.getPayments({ currentMonth: true });
-      const [flatResult, residentResult, expenseResult] = managementData;
+      const [flatResult, residentResult, expenseResult, salaryResult] = managementData;
       setFlats(flatResult.data);
       setResidents(residentResult.data);
       setExpenses(expenseResult.data);
+      setStaffPayments(salaryResult.data);
       setBills(currentMonthResult.data.map((payment) => ({
         id: payment.id,
         flat: payment.flat,

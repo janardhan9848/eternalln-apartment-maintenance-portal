@@ -135,6 +135,9 @@ export const api = {
   getStaff: () =>
     request("/staff"),
 
+  getStaffPayments: () =>
+    request("/staff/payments"),
+
   // STAFF SALARY
   recordSalary: (month) =>
     request("/staff/payments", {

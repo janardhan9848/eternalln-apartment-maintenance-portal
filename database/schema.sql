@@ -54,6 +54,18 @@ CREATE TABLE IF NOT EXISTS portal_expenses (
   INDEX idx_portal_expenses_date (expense_date)
 ) ENGINE=InnoDB;
 
+CREATE TABLE IF NOT EXISTS portal_salary_payments (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  staff_name VARCHAR(120) NOT NULL,
+  salary_month VARCHAR(40) NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  expense_id BIGINT UNSIGNED NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  CONSTRAINT uq_portal_salary_month UNIQUE (salary_month),
+  CONSTRAINT chk_portal_salary_amount CHECK (amount > 0)
+) ENGINE=InnoDB;
+
 -- One login per flat in the first release. Admin/watchman users have flat_id = NULL.
 CREATE TABLE IF NOT EXISTS users (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,

@@ -581,6 +581,31 @@ app.get("/api/staff", (req, res) => {
   });
 });
 
+app.get("/api/staff/payments", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, staff_name AS name, salary_month AS month,
+        amount, 'Recorded' AS status
+      FROM portal_salary_payments
+      ORDER BY created_at DESC, id DESC`
+    );
+    res.json({
+      success: true,
+      data: rows.map(row => ({
+        ...row,
+        id: Number(row.id),
+        amount: Number(row.amount)
+      }))
+    });
+  } catch (error) {
+    console.error("Unable to load watchman salary records:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Unable to load salary records"
+    });
+  }
+});
+
 app.post("/api/staff/payments", async (req, res) => {
   const { month } = req.body || {};
 
@@ -591,38 +616,57 @@ app.post("/api/staff/payments", async (req, res) => {
     });
   }
 
-  const alreadyPaid = salaryPayments.some(
-    payment => payment.month === month
-  );
-
-  if (alreadyPaid) {
-    return res.status(409).json({
-      success: false,
-      message: "Salary already recorded for this month"
-    });
-  }
-
   try {
-    const [expenseResult] = await pool.query(
-      "INSERT INTO portal_expenses (title, amount, expense_date) VALUES ('Watchman Salary', 8000, CURRENT_DATE)"
+    const [existing] = await pool.execute(
+      "SELECT id FROM portal_salary_payments WHERE salary_month = ?",
+      [month]
     );
+    if (existing.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "Salary already recorded for this month"
+      });
+    }
+
+    const connection = await pool.getConnection();
+    let salary;
+    try {
+      await connection.beginTransaction();
+      const [expenseResult] = await connection.execute(
+        "INSERT INTO portal_expenses (title, amount, expense_date) VALUES ('Watchman Salary', 8000, CURRENT_DATE)"
+      );
+      const [salaryResult] = await connection.execute(
+        `INSERT INTO portal_salary_payments
+          (staff_name, salary_month, amount, expense_id)
+        VALUES ('Watchman', ?, 8000, ?)`,
+        [month, expenseResult.insertId]
+      );
+      await connection.commit();
+      salary = {
+        id: Number(salaryResult.insertId),
+        name: "Watchman",
+        amount: 8000,
+        month
+      };
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+
     const [expenseRows] = await pool.execute(
       `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
-      FROM portal_expenses WHERE id = ?`,
-      [expenseResult.insertId]
+      FROM portal_expenses WHERE id = (SELECT expense_id FROM portal_salary_payments WHERE id = ?)`,
+      [salary.id]
     );
-    expenses.push({
-      ...expenseRows[0],
-      id: Number(expenseRows[0].id),
-      amount: Number(expenseRows[0].amount)
-    });
-
-    const salary = {
-      id: Date.now(),
-      name: "Watchman",
-      amount: 8000,
-      month
-    };
+    if (expenseRows.length > 0) {
+      expenses.push({
+        ...expenseRows[0],
+        id: Number(expenseRows[0].id),
+        amount: Number(expenseRows[0].amount)
+      });
+    }
     salaryPayments.push(salary);
 
     res.status(201).json({
@@ -734,6 +778,19 @@ async function initializeManagementData() {
       PRIMARY KEY (id),
       CONSTRAINT chk_portal_expense_amount CHECK (amount > 0),
       INDEX idx_portal_expenses_date (expense_date)
+    ) ENGINE=InnoDB`
+  );
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS portal_salary_payments (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      staff_name VARCHAR(120) NOT NULL,
+      salary_month VARCHAR(40) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      expense_id BIGINT UNSIGNED NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      CONSTRAINT uq_portal_salary_month UNIQUE (salary_month),
+      CONSTRAINT chk_portal_salary_amount CHECK (amount > 0)
     ) ENGINE=InnoDB`
   );
 
