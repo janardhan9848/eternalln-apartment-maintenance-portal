@@ -1,5 +1,5 @@
 
-const API_BASE_URL = "http://localhost:4000/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:4000/api";
 
 // Common function to communicate with backend
 async function request(endpoint, options = {}) {
@@ -48,6 +48,11 @@ export const api = {
     request("/residents", {
       method: "POST",
       body: JSON.stringify(data)
+    }),
+
+  deleteResident: (id) =>
+    request(`/residents/${encodeURIComponent(id)}`, {
+      method: "DELETE"
     }),
 
   // MAINTENANCE BILLS
@@ -113,6 +118,17 @@ export const api = {
     request("/expenses", {
       method: "POST",
       body: JSON.stringify(data)
+    }),
+
+  updateExpense: (id, data) =>
+    request(`/expenses/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(data)
+    }),
+
+  deleteExpense: (id) =>
+    request(`/expenses/${encodeURIComponent(id)}`, {
+      method: "DELETE"
     }),
 
   // STAFF

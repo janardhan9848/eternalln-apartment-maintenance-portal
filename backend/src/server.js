@@ -8,7 +8,10 @@ const PORT = Number(process.env.PORT) || 4000;
 
 // Middleware
 app.use(cors({
-  origin: process.env.FRONTEND_ORIGIN || "http://localhost:5173"
+  origin: (process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || "http://localhost:5173")
+    .split(",")
+    .map(origin => origin.trim())
+    .filter(Boolean)
 }));
 app.use(express.json());
 
@@ -106,37 +109,59 @@ app.post("/api/auth/login", (req, res) => {
 // FLATS API
 // ==================================================
 
-app.get("/api/flats", (req, res) => {
-  res.json({
-    success: true,
-    data: flats
-  });
+app.get("/api/flats", async (_req, res) => {
+  try {
+    const [residentRows] = await pool.query(
+      "SELECT full_name, flat_number FROM portal_residents"
+    );
+    const residentsByFlat = new Map(
+      residentRows.map(resident => [resident.flat_number, resident.full_name])
+    );
+    const data = flats.map(flat => ({
+      ...flat,
+      resident: residentsByFlat.get(flat.number) || "Not assigned",
+      status: residentsByFlat.has(flat.number) ? "Occupied" : "Available"
+    }));
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Unable to load flats:", error.message);
+    res.status(500).json({ success: false, message: "Unable to load flats" });
+  }
 });
 
 // ==================================================
 // RESIDENTS API
 // ==================================================
 
-app.get("/api/residents", (req, res) => {
-  res.json({
-    success: true,
-    data: residents
-  });
+app.get("/api/residents", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, full_name AS name, flat_number AS flat,
+        COALESCE(phone, 'Not added') AS phone
+      FROM portal_residents
+      ORDER BY flat_number`
+    );
+    res.json({ success: true, data: rows });
+  } catch (error) {
+    console.error("Unable to load residents:", error.message);
+    res.status(500).json({ success: false, message: "Unable to load residents" });
+  }
 });
 
-app.post("/api/residents", (req, res) => {
+app.post("/api/residents", async (req, res) => {
   const { name, flat, phone } = req.body || {};
+  const residentName = typeof name === "string" ? name.trim() : "";
+  const flatNumber = String(flat || "").trim();
+  const residentPhone = typeof phone === "string" ? phone.trim() : "";
 
-  if (!name || !name.trim() || !flat) {
+  if (!residentName || residentName.length > 120 || !flatNumber || residentPhone.length > 20) {
     return res.status(400).json({
       success: false,
-      message: "Resident name and flat number are required"
+      message: "Enter a resident name (up to 120 characters), a valid flat number, and a phone number up to 20 characters"
     });
   }
 
-  const selectedFlat = flats.find(
-    item => item.number === String(flat)
-  );
+  const selectedFlat = flats.find(item => item.number === flatNumber);
 
   if (!selectedFlat) {
     return res.status(404).json({
@@ -145,30 +170,76 @@ app.post("/api/residents", (req, res) => {
     });
   }
 
-  if (selectedFlat.status === "Occupied") {
-    return res.status(409).json({
-      success: false,
-      message: "This flat is already occupied"
+  try {
+    const [existingResidents] = await pool.execute(
+      "SELECT id FROM portal_residents WHERE flat_number = ?",
+      [flatNumber]
+    );
+    if (existingResidents.length > 0) {
+      return res.status(409).json({
+        success: false,
+        message: "This flat is already occupied"
+      });
+    }
+
+    const [result] = await pool.execute(
+      "INSERT INTO portal_residents (full_name, flat_number, phone) VALUES (?, ?, ?)",
+      [residentName, flatNumber, residentPhone || null]
+    );
+    const resident = {
+      id: Number(result.insertId),
+      name: residentName,
+      flat: flatNumber,
+      phone: residentPhone || "Not added"
+    };
+
+    residents.push(resident);
+    selectedFlat.resident = resident.name;
+    selectedFlat.status = "Occupied";
+
+    res.status(201).json({
+      success: true,
+      message: "Resident saved successfully",
+      data: resident
     });
+  } catch (error) {
+    if (error.code === "ER_DUP_ENTRY") {
+      return res.status(409).json({ success: false, message: "This flat already has a registered resident" });
+    }
+    console.error("Unable to save resident:", error.message);
+    res.status(500).json({ success: false, message: "Unable to save resident" });
+  }
+});
+
+app.delete("/api/residents/:id", async (req, res) => {
+  const residentId = Number(req.params.id);
+  if (!Number.isSafeInteger(residentId) || residentId <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid resident ID" });
   }
 
-  const resident = {
-    id: Date.now(),
-    name: name.trim(),
-    flat: selectedFlat.number,
-    phone: phone || "Not added"
-  };
+  try {
+    const [rows] = await pool.execute(
+      "SELECT id, flat_number AS flat FROM portal_residents WHERE id = ?",
+      [residentId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Resident not found" });
+    }
 
-  residents.push(resident);
+    await pool.execute("DELETE FROM portal_residents WHERE id = ?", [residentId]);
+    const residentIndex = residents.findIndex(resident => resident.id === residentId);
+    if (residentIndex !== -1) residents.splice(residentIndex, 1);
+    const selectedFlat = flats.find(item => item.number === rows[0].flat);
+    if (selectedFlat) {
+      selectedFlat.resident = "Not assigned";
+      selectedFlat.status = "Available";
+    }
 
-  selectedFlat.resident = resident.name;
-  selectedFlat.status = "Occupied";
-
-  res.status(201).json({
-    success: true,
-    message: "Resident added successfully",
-    data: resident
-  });
+    res.json({ success: true, message: "Resident removed successfully" });
+  } catch (error) {
+    console.error("Unable to remove resident:", error.message);
+    res.status(500).json({ success: false, message: "Unable to remove resident" });
+  }
 });
 
 // ==================================================
@@ -375,22 +446,37 @@ app.patch("/api/payments/:id", async (req, res) => {
 // EXPENSE API
 // ==================================================
 
-app.get("/api/expenses", (req, res) => {
-  res.json({
-    success: true,
-    data: expenses
-  });
+app.get("/api/expenses", async (_req, res) => {
+  try {
+    const [rows] = await pool.query(
+      `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
+      FROM portal_expenses ORDER BY expense_date DESC, id DESC`
+    );
+    const data = rows.map(expense => ({
+      ...expense,
+      id: Number(expense.id),
+      amount: Number(expense.amount)
+    }));
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Unable to load expenses:", error.message);
+    res.status(500).json({ success: false, message: "Unable to load expenses" });
+  }
 });
 
-app.post("/api/expenses", (req, res) => {
+app.post("/api/expenses", async (req, res) => {
   const { title, amount } = req.body || {};
+  const expenseTitle = typeof title === "string" ? title.trim() : "";
   const numericAmount = Number(amount);
+  const decimalPart = String(amount).split(".")[1] || "";
 
   if (
-    !title ||
-    !title.trim() ||
+    !expenseTitle ||
+    expenseTitle.length > 255 ||
     !Number.isFinite(numericAmount) ||
-    numericAmount <= 0
+    numericAmount <= 0 ||
+    numericAmount > 99999999.99 ||
+    decimalPart.length > 2
   ) {
     return res.status(400).json({
       success: false,
@@ -398,20 +484,84 @@ app.post("/api/expenses", (req, res) => {
     });
   }
 
-  const expense = {
-    id: Date.now(),
-    title: title.trim(),
-    amount: numericAmount,
-    date: new Date().toLocaleDateString("en-IN")
-  };
+  try {
+    const [result] = await pool.execute(
+      "INSERT INTO portal_expenses (title, amount, expense_date) VALUES (?, ?, CURRENT_DATE)",
+      [expenseTitle, numericAmount]
+    );
+    const [rows] = await pool.execute(
+      `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
+      FROM portal_expenses WHERE id = ?`,
+      [result.insertId]
+    );
+    const expense = { ...rows[0], id: Number(rows[0].id), amount: Number(rows[0].amount) };
+    expenses.push(expense);
+    res.status(201).json({ success: true, message: "Expense saved successfully", data: expense });
+  } catch (error) {
+    console.error("Unable to save expense:", error.message);
+    res.status(500).json({ success: false, message: "Unable to save expense" });
+  }
+});
 
-  expenses.push(expense);
+app.patch("/api/expenses/:id", async (req, res) => {
+  const expenseId = Number(req.params.id);
+  const { title, amount } = req.body || {};
+  const expenseTitle = typeof title === "string" ? title.trim() : "";
+  const numericAmount = Number(amount);
+  const decimalPart = String(amount).split(".")[1] || "";
 
-  res.status(201).json({
-    success: true,
-    message: "Expense added successfully",
-    data: expense
-  });
+  if (
+    !Number.isSafeInteger(expenseId) || expenseId <= 0 ||
+    !expenseTitle || expenseTitle.length > 255 ||
+    !Number.isFinite(numericAmount) || numericAmount <= 0 ||
+    numericAmount > 99999999.99 ||
+    decimalPart.length > 2
+  ) {
+    return res.status(400).json({ success: false, message: "Enter a valid expense description and amount" });
+  }
+
+  try {
+    await pool.execute(
+      "UPDATE portal_expenses SET title = ?, amount = ? WHERE id = ?",
+      [expenseTitle, numericAmount, expenseId]
+    );
+    const [rows] = await pool.execute(
+      `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
+      FROM portal_expenses WHERE id = ?`,
+      [expenseId]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ success: false, message: "Expense not found" });
+    }
+
+    const updatedExpense = { ...rows[0], id: Number(rows[0].id), amount: Number(rows[0].amount) };
+    const expenseIndex = expenses.findIndex(expense => expense.id === expenseId);
+    if (expenseIndex !== -1) expenses[expenseIndex] = updatedExpense;
+    res.json({ success: true, message: "Expense updated successfully", data: updatedExpense });
+  } catch (error) {
+    console.error("Unable to update expense:", error.message);
+    res.status(500).json({ success: false, message: "Unable to update expense" });
+  }
+});
+
+app.delete("/api/expenses/:id", async (req, res) => {
+  const expenseId = Number(req.params.id);
+  if (!Number.isSafeInteger(expenseId) || expenseId <= 0) {
+    return res.status(400).json({ success: false, message: "Invalid expense ID" });
+  }
+
+  try {
+    const [result] = await pool.execute("DELETE FROM portal_expenses WHERE id = ?", [expenseId]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ success: false, message: "Expense not found" });
+    }
+    const expenseIndex = expenses.findIndex(expense => expense.id === expenseId);
+    if (expenseIndex !== -1) expenses.splice(expenseIndex, 1);
+    res.json({ success: true, message: "Expense removed successfully" });
+  } catch (error) {
+    console.error("Unable to remove expense:", error.message);
+    res.status(500).json({ success: false, message: "Unable to remove expense" });
+  }
 });
 
 // ==================================================
@@ -431,7 +581,7 @@ app.get("/api/staff", (req, res) => {
   });
 });
 
-app.post("/api/staff/payments", (req, res) => {
+app.post("/api/staff/payments", async (req, res) => {
   const { month } = req.body || {};
 
   if (!month) {
@@ -452,70 +602,79 @@ app.post("/api/staff/payments", (req, res) => {
     });
   }
 
-  const salary = {
-    id: Date.now(),
-    name: "Watchman",
-    amount: 8000,
-    month
-  };
+  try {
+    const [expenseResult] = await pool.query(
+      "INSERT INTO portal_expenses (title, amount, expense_date) VALUES ('Watchman Salary', 8000, CURRENT_DATE)"
+    );
+    const [expenseRows] = await pool.execute(
+      `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
+      FROM portal_expenses WHERE id = ?`,
+      [expenseResult.insertId]
+    );
+    expenses.push({
+      ...expenseRows[0],
+      id: Number(expenseRows[0].id),
+      amount: Number(expenseRows[0].amount)
+    });
 
-  salaryPayments.push(salary);
+    const salary = {
+      id: Date.now(),
+      name: "Watchman",
+      amount: 8000,
+      month
+    };
+    salaryPayments.push(salary);
 
-  // Also record salary as an apartment expense.
-  expenses.push({
-    id: Date.now() + 1,
-    title: "Watchman Salary",
-    amount: 8000,
-    date: new Date().toLocaleDateString("en-IN")
-  });
-
-  res.status(201).json({
-    success: true,
-    message: "Watchman salary recorded",
-    data: salary
-  });
+    res.status(201).json({
+      success: true,
+      message: "Watchman salary recorded",
+      data: salary
+    });
+  } catch (error) {
+    console.error("Unable to record watchman salary:", error.message);
+    res.status(500).json({ success: false, message: "Unable to record watchman salary" });
+  }
 });
 
 // ==================================================
 // REPORTS API
 // ==================================================
 
-app.get("/api/reports", (req, res) => {
-  const totalExpenses = expenses.reduce(
-    (sum, expense) => sum + expense.amount,
-    0
-  );
-
-  ensureCurrentPaymentRecords()
-    .then(() => pool.query(
-      `SELECT
+app.get("/api/reports", async (_req, res) => {
+  try {
+    await ensureCurrentPaymentRecords();
+    const [[paymentRows], [managementRows]] = await Promise.all([
+      pool.query(
+        `SELECT
         COALESCE(SUM(CASE WHEN status = 'paid' THEN amount ELSE 0 END), 0) AS totalCollection,
         SUM(status = 'paid') AS paidBills,
         SUM(status = 'unpaid') AS pendingBills
-      FROM maintenance_payment_records`
-    ))
-    .then(([rows]) => {
-      const totalCollection = Number(rows[0].totalCollection);
-      res.json({
-        success: true,
-        data: {
-          totalFlats: flats.length,
-          totalResidents: residents.length,
-          totalCollection,
-          totalExpenses,
-          balance: totalCollection - totalExpenses,
-          paidBills: Number(rows[0].paidBills),
-          pendingBills: Number(rows[0].pendingBills)
-        }
-      });
-    })
-    .catch((error) => {
-      console.error("Unable to load payment report totals:", error.message);
-      res.status(500).json({
-        success: false,
-        message: "Unable to load report totals"
-      });
+        FROM maintenance_payment_records`
+      ),
+      pool.query(
+        `SELECT
+          (SELECT COUNT(*) FROM portal_residents) AS totalResidents,
+          COALESCE((SELECT SUM(amount) FROM portal_expenses), 0) AS totalExpenses`
+      )
+    ]);
+    const totalCollection = Number(paymentRows[0].totalCollection);
+    const totalExpenses = Number(managementRows[0].totalExpenses);
+    res.json({
+      success: true,
+      data: {
+        totalFlats: flats.length,
+        totalResidents: Number(managementRows[0].totalResidents),
+        totalCollection,
+        totalExpenses,
+        balance: totalCollection - totalExpenses,
+        paidBills: Number(paymentRows[0].paidBills),
+        pendingBills: Number(paymentRows[0].pendingBills)
+      }
     });
+  } catch (error) {
+    console.error("Unable to load payment report totals:", error.message);
+    res.status(500).json({ success: false, message: "Unable to load report totals" });
+  }
 });
 
 // ==================================================
@@ -542,8 +701,90 @@ async function ensureCurrentPaymentRecords() {
   );
 }
 
+async function initializeManagementData() {
+  const [residentTables] = await pool.query(
+    `SELECT TABLE_NAME FROM information_schema.tables
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'portal_residents'`
+  );
+  const [expenseTables] = await pool.query(
+    `SELECT TABLE_NAME FROM information_schema.tables
+    WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'portal_expenses'`
+  );
+
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS portal_residents (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      full_name VARCHAR(120) NOT NULL,
+      flat_number VARCHAR(10) NOT NULL,
+      phone VARCHAR(20) NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      CONSTRAINT uq_portal_resident_flat UNIQUE (flat_number)
+    ) ENGINE=InnoDB`
+  );
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS portal_expenses (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      title VARCHAR(255) NOT NULL,
+      amount DECIMAL(10,2) NOT NULL,
+      expense_date DATE NOT NULL,
+      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      CONSTRAINT chk_portal_expense_amount CHECK (amount > 0),
+      INDEX idx_portal_expenses_date (expense_date)
+    ) ENGINE=InnoDB`
+  );
+
+  if (residentTables.length === 0) {
+    await pool.query(
+      `INSERT INTO portal_residents (full_name, flat_number)
+      VALUES ('Resident 101', '101'), ('Resident 102', '102')`
+    );
+  }
+  if (expenseTables.length === 0) {
+    await pool.query(
+      `INSERT INTO portal_expenses (title, amount, expense_date)
+      VALUES ('Cleaning', 1500, '2026-11-01')`
+    );
+  }
+
+  const [residentRows] = await pool.query(
+    `SELECT id, full_name AS name, flat_number AS flat,
+      COALESCE(phone, 'Not added') AS phone
+    FROM portal_residents ORDER BY flat_number`
+  );
+  residents.splice(
+    0,
+    residents.length,
+    ...residentRows.map(resident => ({ ...resident, id: Number(resident.id) }))
+  );
+
+  for (const flat of flats) {
+    const resident = residents.find(item => item.flat === flat.number);
+    flat.resident = resident ? resident.name : "Not assigned";
+    flat.status = resident ? "Occupied" : "Available";
+  }
+
+  const [expenseRows] = await pool.query(
+    `SELECT id, title, amount, DATE_FORMAT(expense_date, '%d-%b-%Y') AS date
+    FROM portal_expenses ORDER BY expense_date DESC, id DESC`
+  );
+  expenses.splice(
+    0,
+    expenses.length,
+    ...expenseRows.map(expense => ({
+      ...expense,
+      id: Number(expense.id),
+      amount: Number(expense.amount)
+    }))
+  );
+}
+
 async function startServer() {
   await pool.query("SELECT 1");
+  await initializeManagementData();
   await pool.query(
     `CREATE TABLE IF NOT EXISTS maintenance_payment_records (
       id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -563,7 +804,7 @@ async function startServer() {
   );
   await ensureCurrentPaymentRecords();
 
-  app.listen(PORT, () => {
+  app.listen(PORT, "127.0.0.1", () => {
     console.log("Apartment Maintenance Portal backend running");
     console.log(`Server: http://localhost:${PORT}`);
     console.log("Database: connected");

@@ -1,6 +1,6 @@
 
 export const PAYMENT_CONFIG = {
-  upiId: "9848599311-@2axl",
+  upiId: "9848599311@axl",
   payeeName: "Kairika Janardhan",
   amount: 1835,
   currency: "INR"

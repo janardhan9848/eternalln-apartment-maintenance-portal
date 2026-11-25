@@ -1,0 +1,21 @@
+[Unit]
+Description=Apartment Maintenance Portal Express API
+After=network.target mysql.service
+Requires=mysql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/apartment-maintenance-portal/app/backend
+EnvironmentFile=/etc/apartment-maintenance-portal/backend.env
+ExecStart=/usr/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

@@ -31,20 +31,27 @@ CREATE TABLE IF NOT EXISTS flats (
   INDEX idx_flats_floor (apartment_id, floor_number)
 ) ENGINE=InnoDB;
 
-CREATE TABLE IF NOT EXISTS maintenance_payment_records (
+CREATE TABLE IF NOT EXISTS portal_residents (
   id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  full_name VARCHAR(120) NOT NULL,
   flat_number VARCHAR(10) NOT NULL,
-  billing_month DATE NOT NULL,
-  amount DECIMAL(10,2) NOT NULL DEFAULT 1835.00,
-  payment_date DATE NULL,
-  payment_method ENUM('Cash','UPI') NULL,
-  status ENUM('unpaid','paid') NOT NULL DEFAULT 'unpaid',
+  phone VARCHAR(20) NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  CONSTRAINT uq_payment_record_flat_month UNIQUE (flat_number, billing_month),
-  CONSTRAINT chk_payment_record_amount CHECK (amount = 1835.00),
-  INDEX idx_payment_records_month_status (billing_month, status)
+  CONSTRAINT uq_portal_resident_flat UNIQUE (flat_number)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS portal_expenses (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  title VARCHAR(255) NOT NULL,
+  amount DECIMAL(10,2) NOT NULL,
+  expense_date DATE NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  CONSTRAINT chk_portal_expense_amount CHECK (amount > 0),
+  INDEX idx_portal_expenses_date (expense_date)
 ) ENGINE=InnoDB;
 
 -- One login per flat in the first release. Admin/watchman users have flat_id = NULL.
@@ -223,6 +230,15 @@ INSERT IGNORE INTO flats (apartment_id, floor_number, flat_number) VALUES
 (@apartment_id, 4, '402'),
 (@apartment_id, 5, '501'),
 (@apartment_id, 5, '502');
+
+-- Initial portal records match the original local dashboard examples.
+INSERT IGNORE INTO portal_residents (full_name, flat_number) VALUES
+('Resident 101', '101'),
+('Resident 102', '102');
+
+INSERT INTO portal_expenses (title, amount, expense_date)
+SELECT 'Cleaning', 1500.00, '2026-11-01'
+WHERE NOT EXISTS (SELECT 1 FROM portal_expenses);
 
 -- No default admin password is inserted. Create admin credentials in Phase 2
 -- using a password-hashing library and a one-time setup process.
