@@ -8,9 +8,9 @@ phases:
     commands:
       - cd frontend && npm install
 
-  build:
-    commands:
-      - npm run build
+build:
+  commands:
+    - VITE_API_BASE_URL=/api npm run build
 
   post_build:
     commands:
