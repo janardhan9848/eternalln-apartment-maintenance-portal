@@ -1,3 +1,4 @@
+
 version: 0.2
 
 phases:
@@ -5,15 +6,17 @@ phases:
     runtime-versions:
       nodejs: 22
     commands:
-      - echo "Installing frontend dependencies..."
       - cd frontend
       - npm install
 
   build:
     commands:
-      - echo "Building EternalLN Apartment Portal..."
       - npm run build
-      - echo "Frontend build completed successfully."
+
+  post_build:
+    commands:
+      - aws s3 sync dist/ s3://eternalln-apartment-portal-frontend-2026/ --delete
+      - aws cloudfront create-invalidation --distribution-id EKLWXDDGY134U --paths "/*"
 
 artifacts:
   base-directory: frontend/dist
