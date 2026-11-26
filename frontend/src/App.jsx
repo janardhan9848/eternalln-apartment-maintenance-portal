@@ -51,6 +51,8 @@ function App() {
   const [paymentSearch, setPaymentSearch] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState("All");
   const [editingPaymentId, setEditingPaymentId] = useState(null);
+  const [busyAction, setBusyAction] = useState("");
+  const [toast, setToast] = useState(null);
   const [selectedBillFlat, setSelectedBillFlat] = useState("101");
   const [billMessage, setBillMessage] = useState("");
   const [selectedResidentIds, setSelectedResidentIds] = useState([]);
@@ -117,6 +119,16 @@ function App() {
   const pendingBills = bills.filter(
     (bill) => bill.status === "Pending"
   );
+
+  useEffect(() => {
+    if (!toast) return undefined;
+    const timeoutId = window.setTimeout(() => setToast(null), 3800);
+    return () => window.clearTimeout(timeoutId);
+  }, [toast]);
+
+  function showToast(message, tone = "success") {
+    setToast({ message, tone });
+  }
 
   useEffect(() => {
     if (!loggedIn || role !== "admin") return undefined;
@@ -415,6 +427,7 @@ async function login(event) {
   async function submitResidentPayment() {
     setPaymentError("");
     setPaymentMessage("");
+    setBusyAction("resident-payment");
     try {
       const result = await api.submitPayment({
         flat: flatNumber,
@@ -422,8 +435,11 @@ async function login(event) {
       });
       setPayments([result.data]);
       setPaymentMessage("Payment marked as paid. Admin totals and reports are updated.");
+      showToast("Payment marked as paid");
     } catch (error) {
       setPaymentError(`Unable to update payment: ${error.message}`);
+    } finally {
+      setBusyAction("");
     }
   }
 
@@ -560,13 +576,16 @@ async function login(event) {
     }
 
     try {
+      setBusyAction("salary");
       const result = await api.recordSalary(currentMonth);
       setStaffPayments((currentPayments) => [...currentPayments, result.data]);
       const expenseResult = await api.getExpenses();
       setExpenses(expenseResult.data);
-      alert("Watchman salary of ₹8,000 recorded as an expense.");
+      showToast("Watchman salary of ₹8,000 recorded");
     } catch (error) {
-      alert(`Unable to record watchman salary: ${error.message}`);
+      showToast(`Unable to record watchman salary: ${error.message}`, "error");
+    } finally {
+      setBusyAction("");
     }
   }
 
@@ -1024,7 +1043,9 @@ async function login(event) {
               <p>Monthly salary: ₹8,000</p>
               <p>Salary is recorded manually by the admin.</p>
             </div>
-            <button className="primary-btn" onClick={paySalary}>Record This Month's Salary</button>
+            <button className="primary-btn" onClick={paySalary} disabled={busyAction === "salary"}>
+              {busyAction === "salary" ? "Recording..." : "Record This Month's Salary"}
+            </button>
           </div>
           <div className="content-card">
             <h3>Salary Payment History</h3>
@@ -1150,6 +1171,7 @@ async function login(event) {
   if (role === "resident") {
     return (
       <div className="resident-page">
+        {toast && <div className={`toast toast-${toast.tone}`} role="status">{toast.message}</div>}
         <header className="topbar resident-topbar">
           <div className="resident-brand"><span className="brand-symbol">E</span><div><strong>ETERNAL LAKSHMI NILAYAM</strong><small>RESIDENT PORTAL</small></div></div>
           <div className="resident-account"><span className="admin-avatar">⌂</span><div><strong>Flat {flatNumber}</strong><small>Resident account</small></div><button className="logout-btn" onClick={logout}>Sign out</button></div>
@@ -1195,8 +1217,8 @@ async function login(event) {
                       Open UPI app
                     </a>
                   )}
-                  <button className="primary-btn resident-pay-link" onClick={submitResidentPayment}>
-                    Done — Mark as Paid
+                  <button className="primary-btn resident-pay-link" onClick={submitResidentPayment} disabled={busyAction === "resident-payment"}>
+                    {busyAction === "resident-payment" ? "Recording payment..." : "Done — Mark as Paid"}
                   </button>
                   {paymentMessage && <p className="resident-payment-confirmation">{paymentMessage}</p>}
                   {paymentError && <p className="error-message">{paymentError}</p>}
@@ -1216,6 +1238,7 @@ async function login(event) {
 
   return (
     <div className="admin-layout">
+      {toast && <div className={`toast toast-${toast.tone}`} role="status">{toast.message}</div>}
       <aside className="sidebar">
         <div className="sidebar-brand">
           <div className="brand-symbol">E</div>

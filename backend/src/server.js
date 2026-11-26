@@ -1,4 +1,5 @@
-
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import cors from "cors";
 import express from "express";
 import { pool } from "./config/database.js";

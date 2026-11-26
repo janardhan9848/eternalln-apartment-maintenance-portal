@@ -855,6 +855,56 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   outline-offset: 2px;
 }
 
+.toast {
+  position: fixed;
+  z-index: 1000;
+  right: 24px;
+  bottom: 24px;
+  max-width: min(390px, calc(100vw - 32px));
+  padding: 13px 16px;
+  border: 1px solid #dce8de;
+  border-radius: 10px;
+  background: #fff;
+  color: #356b50;
+  box-shadow: 0 14px 40px rgba(35, 69, 51, .16);
+  font-size: 12px;
+  font-weight: 650;
+  animation: toast-in .24s ease-out;
+}
+
+.toast-error {
+  border-color: #efd5cf;
+  color: #9a4c40;
+}
+
+.primary-btn:disabled,
+.small-btn:disabled,
+.logout-btn:disabled {
+  cursor: wait;
+  opacity: .68;
+  transform: none;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    transition-duration: .01ms !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
 .page {
   min-height: 100vh;
   padding: clamp(18px, 4vw, 56px);
@@ -2650,3 +2700,4 @@ tbody tr:hover {
     width: 100%;
   }
 }
+
